@@ -674,6 +674,19 @@ function log(msg, type) {
   // Keep last 50 entries
   while (area.children.length > 50) area.removeChild(area.firstChild);
 }
+
+// ─── Auto-login via URL params ───
+(function autoLogin() {
+  const params = new URLSearchParams(window.location.search);
+  const d = params.get('device');
+  const t = params.get('token');
+  if (d && t) {
+    document.getElementById('input-device').value = d;
+    document.getElementById('input-token').value = t;
+    // Auto-connect after DOM ready
+    connectDevice();
+  }
+})();
 </script>
 </body>
 </html>
