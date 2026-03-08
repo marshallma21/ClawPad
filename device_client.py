@@ -204,6 +204,11 @@ class DeviceClient:
                     img_b64 = base64.b64encode(f.read()).decode()
                 result_data = {"image_base64": img_b64, "path": path}
 
+            elif action == "screenshot_stream":
+                quality = params.get("quality", 50)
+                img_b64 = self.controller.screenshot_stream(quality=quality)
+                result_data = {"image_base64": img_b64, "format": "jpeg"}
+
             elif action == "tap":
                 self.controller.tap(params["x"], params["y"])
 

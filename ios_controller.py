@@ -17,6 +17,8 @@ ClawPad - iOS Device Controller for macOS
 """
 
 import argparse
+import base64
+import io
 import json
 import os
 import subprocess
@@ -149,6 +151,28 @@ class iOSController:
         self._client.screenshot(save_path)
         print(f"📸 截图已保存: {save_path}")
         return save_path
+
+    def screenshot_stream(self, quality: int = 50) -> str:
+        """
+        获取设备截图，不保存到磁盘，直接返回 JPEG base64。
+
+        使用有损压缩以减小传输体积，适合 Web 实时预览场景。
+
+        Args:
+            quality: JPEG 压缩质量 (1-100)，值越小体积越小画质越低
+
+        Returns:
+            JPEG 图片的 base64 编码字符串
+        """
+        self._ensure_connected()
+        quality = max(1, min(100, quality))
+        pil_img = self._client.screenshot()  # 返回 PIL.Image
+        buf = io.BytesIO()
+        pil_img.save(buf, format="JPEG", quality=quality, optimize=True)
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
+        size_kb = len(buf.getvalue()) / 1024
+        print(f"📸 Stream 截图: quality={quality}, size={size_kb:.1f}KB")
+        return img_b64
 
     # ── 点击/触摸 ─────────────────────────────────────────────────────────
 

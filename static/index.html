@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawPad - iOS Remote Control</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface2: #0f3460;
+    --accent: #e94560;
+    --accent2: #533483;
+    --text: #eee;
+    --text-muted: #888;
+    --radius: 10px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* ── Header ── */
+  .header {
+    padding: 16px 24px;
+    text-align: center;
+    width: 100%;
+    background: var(--surface);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .header h1 { font-size: 22px; font-weight: 600; }
+  .header h1 span { color: var(--accent); }
+
+  /* ── Login Panel ── */
+  #login-panel {
+    margin-top: 80px;
+    background: var(--surface);
+    padding: 40px;
+    border-radius: var(--radius);
+    width: 400px;
+    max-width: 90vw;
+  }
+  #login-panel h2 { margin-bottom: 24px; font-size: 18px; text-align: center; }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
+  .form-group input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .form-group input:focus { border-color: var(--accent); }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity .2s, transform .1s;
+    color: #fff;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--accent); width: 100%; }
+  .btn-secondary { background: var(--surface2); }
+  .btn-small { padding: 6px 12px; font-size: 12px; }
+  .btn-icon { width: 40px; height: 40px; padding: 0; font-size: 18px; border-radius: 8px; }
+  #login-error { color: var(--accent); font-size: 13px; margin-top: 12px; display: none; }
+
+  /* ── Control Panel ── */
+  #control-panel { display: none; width: 100%; }
+  .main-layout {
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+    min-height: calc(100vh - 60px);
+  }
+
+  /* Left: Screen */
+  .screen-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 0;
+  }
+  .screen-wrapper {
+    position: relative;
+    background: #000;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    cursor: crosshair;
+    max-width: 100%;
+  }
+  #device-screen {
+    display: block;
+    max-height: calc(100vh - 140px);
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  .click-indicator {
+    position: absolute;
+    width: 30px; height: 30px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    animation: clickPulse 0.5s ease-out forwards;
+  }
+  @keyframes clickPulse {
+    0% { opacity:1; width:10px; height:10px; }
+    100% { opacity:0; width:40px; height:40px; }
+  }
+
+  /* Right: Toolbar */
+  .toolbar {
+    width: 260px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .tool-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .tool-card h3 { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* Device info */
+  .device-info-row { font-size: 13px; margin-bottom: 4px; color: var(--text-muted); }
+  .device-info-row span { color: var(--text); }
+
+  /* Buttons grid */
+  .btn-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .btn-grid .btn { background: var(--surface2); }
+
+  /* Text input area */
+  .text-input-group { display: flex; gap: 8px; }
+  .text-input-group input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+  }
+  .text-input-group input:focus { border-color: var(--accent); }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .status-dot.online { background: #4caf50; }
+  .status-dot.offline { background: var(--accent); }
+
+  /* Swipe hint */
+  .swipe-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 4px;
+  }
+
+  /* Settings row */
+  .settings-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .settings-row label { font-size: 13px; }
+  .settings-row select, .settings-row input[type=number] {
+    padding: 4px 8px;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    width: 80px;
+    outline: none;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .main-layout { flex-direction: column; }
+    .toolbar { width: 100%; flex-direction: row; flex-wrap: wrap; }
+    .tool-card { flex: 1; min-width: 200px; }
+    #device-screen { max-height: 60vh; }
+  }
+
+  /* Log area */
+  #log-area {
+    max-height: 120px;
+    overflow-y: auto;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  #log-area .log-error { color: var(--accent); }
+  #log-area .log-ok { color: #4caf50; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🐾 <span>Claw</span>Pad</h1>
+</div>
+
+<!-- ── Login ── -->
+<div id="login-panel">
+  <h2>连接设备</h2>
+  <div class="form-group">
+    <label>Device ID</label>
+    <input type="text" id="input-device" placeholder="如 a1b2c3d4" autocomplete="off">
+  </div>
+  <div class="form-group">
+    <label>Token</label>
+    <input type="text" id="input-token" placeholder="鉴权 Token" autocomplete="off">
+  </div>
+  <button class="btn btn-primary" onclick="connectDevice()">连接</button>
+  <div id="login-error"></div>
+</div>
+
+<!-- ── Control Panel ── -->
+<div id="control-panel">
+  <div class="main-layout">
+    <!-- Screen -->
+    <div class="screen-container">
+      <div class="screen-wrapper" id="screen-wrapper">
+        <img id="device-screen" src="" alt="设备屏幕" draggable="false">
+      </div>
+      <div class="swipe-hint">点击屏幕模拟触摸 · 拖拽模拟滑动</div>
+      <div class="status-bar">
+        <div><span class="status-dot online" id="status-dot"></span><span id="status-text">已连接</span></div>
+        <div>刷新间隔: <span id="refresh-display">1s</span> · 上次: <span id="last-update">-</span></div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <!-- Device Info -->
+      <div class="tool-card" id="card-info">
+        <h3>📱 设备信息</h3>
+        <div id="device-info-content">
+          <div class="device-info-row">加载中...</div>
+        </div>
+        <button class="btn btn-secondary btn-small" style="margin-top:10px;width:100%;" onclick="disconnectDevice()">断开连接</button>
+      </div>
+
+      <!-- Special Keys -->
+      <div class="tool-card">
+        <h3>🎮 操作按钮</h3>
+        <div class="btn-grid">
+          <button class="btn btn-icon" onclick="sendAction('press_home')" title="Home">🏠</button>
+          <button class="btn btn-icon" onclick="sendAction('swipe_up')" title="上滑">⬆️</button>
+          <button class="btn btn-icon" onclick="sendAction('swipe_down')" title="下滑">⬇️</button>
+          <button class="btn btn-icon" onclick="sendAction('press_volume_up')" title="音量+">🔊</button>
+          <button class="btn btn-icon" onclick="sendAction('press_volume_down')" title="音量-">🔉</button>
+          <button class="btn btn-icon" onclick="takeScreenshot()" title="截图">📸</button>
+        </div>
+      </div>
+
+      <!-- Text Input -->
+      <div class="tool-card">
+        <h3>⌨️ 文本输入</h3>
+        <div class="text-input-group">
+          <input type="text" id="text-input" placeholder="输入内容后回车发送" onkeydown="onTextKeydown(event)">
+          <button class="btn btn-secondary btn-small" onclick="sendText()">发送</button>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="tool-card">
+        <h3>⚙️ 设置</h3>
+        <div class="settings-row">
+          <label>刷新间隔</label>
+          <select id="refresh-interval" onchange="updateRefreshInterval()">
+            <option value="500">0.5s</option>
+            <option value="1000" selected>1s</option>
+            <option value="2000">2s</option>
+            <option value="3000">3s</option>
+            <option value="5000">5s</option>
+            <option value="0">手动</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label>画质 <span id="quality-display">50</span>%</label>
+          <input type="range" id="quality-slider" min="1" max="100" value="50" oninput="updateQuality()" style="width:100px;">
+        </div>
+        <div class="settings-row">
+          <label>传输大小</label>
+          <span id="transfer-size" style="font-size:12px;color:var(--text-muted);">-</span>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="tool-card" style="flex:1;min-height:100px;">
+        <h3>📋 操作日志</h3>
+        <div id="log-area"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ───
+let deviceId = '';
+let token = '';
+let baseUrl = '';
+let refreshTimer = null;
+let refreshMs = 1000;
+let screenWidth = 0;
+let screenHeight = 0;
+let isRefreshing = false;
+let imageQuality = 50;
+
+// Swipe tracking
+let dragStart = null;
+const SWIPE_THRESHOLD = 20; // px on screen image
+
+// ─── Login ───
+async function connectDevice() {
+  deviceId = document.getElementById('input-device').value.trim();
+  token = document.getElementById('input-token').value.trim();
+  baseUrl = window.location.origin;
+  const errEl = document.getElementById('login-error');
+
+  if (!deviceId || !token) {
+    errEl.textContent = '请输入 Device ID 和 Token';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  errEl.style.display = 'none';
+  try {
+    // Verify: fetch device size
+    const resp = await apiFetch('/size');
+    screenWidth = resp.width;
+    screenHeight = resp.height;
+    log(`已连接设备 ${deviceId}, 屏幕 ${screenWidth}x${screenHeight}`, 'ok');
+
+    // Load device info
+    loadDeviceInfo();
+
+    // Switch to control panel
+    document.getElementById('login-panel').style.display = 'none';
+    document.getElementById('control-panel').style.display = 'block';
+
+    // Start screenshot loop
+    startRefresh();
+  } catch (e) {
+    errEl.textContent = e.message || '连接失败';
+    errEl.style.display = 'block';
+  }
+}
+
+function disconnectDevice() {
+  stopRefresh();
+  document.getElementById('login-panel').style.display = 'block';
+  document.getElementById('control-panel').style.display = 'none';
+  log('已断开连接');
+}
+
+// ─── API helpers ───
+async function apiFetch(path, options = {}) {
+  const url = `${baseUrl}/devices/${deviceId}${path}`;
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    ...(options.headers || {}),
+  };
+  const resp = await fetch(url, { ...options, headers });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try { const j = await resp.json(); detail = j.detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  const ct = resp.headers.get('content-type') || '';
+  if (ct.includes('json')) return resp.json();
+  if (ct.includes('image')) return resp.blob();
+  return resp;
+}
+
+async function apiPost(path, body = {}) {
+  return apiFetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// ─── Screenshot refresh ───
+function startRefresh() {
+  stopRefresh();
+  takeScreenshot();
+  if (refreshMs > 0) {
+    refreshTimer = setInterval(() => takeScreenshot(), refreshMs);
+  }
+}
+
+function stopRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+}
+
+function updateRefreshInterval() {
+  refreshMs = parseInt(document.getElementById('refresh-interval').value);
+  document.getElementById('refresh-display').textContent =
+    refreshMs > 0 ? `${refreshMs/1000}s` : '手动';
+  startRefresh();
+}
+
+function updateQuality() {
+  imageQuality = parseInt(document.getElementById('quality-slider').value);
+  document.getElementById('quality-display').textContent = imageQuality;
+}
+
+async function takeScreenshot() {
+  if (isRefreshing) return;
+  isRefreshing = true;
+  try {
+    const url = `${baseUrl}/devices/${deviceId}/screenshot/stream?quality=${imageQuality}`;
+    const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try { const j = await resp.json(); detail = j.detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    const blob = await resp.blob();
+    const sizeKB = (blob.size / 1024).toFixed(1);
+    document.getElementById('transfer-size').textContent = `${sizeKB} KB`;
+    const imgUrl = URL.createObjectURL(blob);
+    const img = document.getElementById('device-screen');
+    const oldUrl = img.src;
+    img.src = imgUrl;
+    if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+    setStatus(true);
+  } catch (e) {
+    setStatus(false, e.message);
+  } finally {
+    isRefreshing = false;
+  }
+}
+
+// ─── Device info ───
+async function loadDeviceInfo() {
+  try {
+    const info = await apiFetch('/info');
+    const el = document.getElementById('device-info-content');
+    el.innerHTML = '';
+    for (const [k, v] of Object.entries(info)) {
+      el.innerHTML += `<div class="device-info-row">${k}: <span>${v}</span></div>`;
+    }
+  } catch (e) {
+    log(`获取设备信息失败: ${e.message}`, 'error');
+  }
+}
+
+// ─── Touch handling (click & swipe) ───
+const screenEl = document.getElementById('device-screen');
+
+screenEl.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const rect = screenEl.getBoundingClientRect();
+  dragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top, time: Date.now() };
+});
+
+screenEl.addEventListener('mouseup', async (e) => {
+  if (!dragStart) return;
+  e.preventDefault();
+  const rect = screenEl.getBoundingClientRect();
+  const endX = e.clientX - rect.left;
+  const endY = e.clientY - rect.top;
+  const dx = endX - dragStart.x;
+  const dy = endY - dragStart.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+
+  const scaleX = screenWidth / rect.width;
+  const scaleY = screenHeight / rect.height;
+
+  if (dist < SWIPE_THRESHOLD) {
+    // Tap
+    const devX = Math.round(dragStart.x * scaleX);
+    const devY = Math.round(dragStart.y * scaleY);
+    showClickIndicator(dragStart.x + rect.left, dragStart.y + rect.top);
+    try {
+      await apiPost('/tap', { x: devX, y: devY });
+      log(`点击 (${devX}, ${devY})`, 'ok');
+    } catch (err) {
+      log(`点击失败: ${err.message}`, 'error');
+    }
+    // Refresh after tap
+    setTimeout(() => takeScreenshot(), 300);
+  } else {
+    // Swipe
+    const x1 = Math.round(dragStart.x * scaleX);
+    const y1 = Math.round(dragStart.y * scaleY);
+    const x2 = Math.round(endX * scaleX);
+    const y2 = Math.round(endY * scaleY);
+    const dur = Math.min(1.0, Math.max(0.1, (Date.now() - dragStart.time) / 1000));
+    try {
+      await apiPost('/swipe', { x1, y1, x2, y2, duration: parseFloat(dur.toFixed(2)) });
+      log(`滑动 (${x1},${y1}) → (${x2},${y2})`, 'ok');
+    } catch (err) {
+      log(`滑动失败: ${err.message}`, 'error');
+    }
+    setTimeout(() => takeScreenshot(), 300);
+  }
+  dragStart = null;
+});
+
+screenEl.addEventListener('mouseleave', () => { dragStart = null; });
+
+// Prevent context menu on screen
+screenEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ─── Touch support (mobile) ───
+screenEl.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect = screenEl.getBoundingClientRect();
+  dragStart = { x: touch.clientX - rect.left, y: touch.clientY - rect.top, time: Date.now() };
+}, { passive: false });
+
+screenEl.addEventListener('touchend', async (e) => {
+  if (!dragStart) return;
+  e.preventDefault();
+  const touch = e.changedTouches[0];
+  const rect = screenEl.getBoundingClientRect();
+  const endX = touch.clientX - rect.left;
+  const endY = touch.clientY - rect.top;
+  const dx = endX - dragStart.x;
+  const dy = endY - dragStart.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+
+  const scaleX = screenWidth / rect.width;
+  const scaleY = screenHeight / rect.height;
+
+  if (dist < SWIPE_THRESHOLD) {
+    const devX = Math.round(dragStart.x * scaleX);
+    const devY = Math.round(dragStart.y * scaleY);
+    try {
+      await apiPost('/tap', { x: devX, y: devY });
+      log(`点击 (${devX}, ${devY})`, 'ok');
+    } catch (err) {
+      log(`点击失败: ${err.message}`, 'error');
+    }
+    setTimeout(() => takeScreenshot(), 300);
+  } else {
+    const x1 = Math.round(dragStart.x * scaleX);
+    const y1 = Math.round(dragStart.y * scaleY);
+    const x2 = Math.round(endX * scaleX);
+    const y2 = Math.round(endY * scaleY);
+    const dur = Math.min(1.0, Math.max(0.1, (Date.now() - dragStart.time) / 1000));
+    try {
+      await apiPost('/swipe', { x1, y1, x2, y2, duration: parseFloat(dur.toFixed(2)) });
+      log(`滑动 (${x1},${y1}) → (${x2},${y2})`, 'ok');
+    } catch (err) {
+      log(`滑动失败: ${err.message}`, 'error');
+    }
+    setTimeout(() => takeScreenshot(), 300);
+  }
+  dragStart = null;
+}, { passive: false });
+
+// ─── Click indicator ───
+function showClickIndicator(pageX, pageY) {
+  const circle = document.createElement('div');
+  circle.className = 'click-indicator';
+  circle.style.left = pageX + 'px';
+  circle.style.top = pageY + 'px';
+  document.body.appendChild(circle);
+  setTimeout(() => circle.remove(), 500);
+}
+
+// ─── Actions ───
+async function sendAction(action) {
+  try {
+    await apiPost(`/${action.replace('press_', '')}`, {});
+    log(`${action}`, 'ok');
+    setTimeout(() => takeScreenshot(), 400);
+  } catch (e) {
+    log(`${action} 失败: ${e.message}`, 'error');
+  }
+}
+
+// ─── Text input ───
+function onTextKeydown(e) {
+  if (e.key === 'Enter') sendText();
+}
+
+async function sendText() {
+  const input = document.getElementById('text-input');
+  const text = input.value;
+  if (!text) return;
+  try {
+    await apiPost('/type', { text });
+    log(`输入: "${text}"`, 'ok');
+    input.value = '';
+    setTimeout(() => takeScreenshot(), 300);
+  } catch (e) {
+    log(`输入失败: ${e.message}`, 'error');
+  }
+}
+
+// ─── Keyboard shortcuts ───
+document.addEventListener('keydown', (e) => {
+  // Don't capture if typing in input fields
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  // Don't capture on login page
+  if (document.getElementById('control-panel').style.display === 'none') return;
+
+  if (e.key === 'Home' || (e.key === 'h' && e.metaKey)) {
+    e.preventDefault();
+    sendAction('press_home');
+  } else if (e.key === 'F5' || (e.key === 'r' && !e.metaKey && !e.ctrlKey)) {
+    e.preventDefault();
+    takeScreenshot();
+  }
+});
+
+// ─── Status ───
+function setStatus(ok, msg) {
+  const dot = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  dot.className = 'status-dot ' + (ok ? 'online' : 'offline');
+  text.textContent = ok ? '已连接' : (msg || '断开');
+}
+
+// ─── Log ───
+function log(msg, type) {
+  const area = document.getElementById('log-area');
+  const ts = new Date().toLocaleTimeString();
+  const cls = type === 'error' ? 'log-error' : type === 'ok' ? 'log-ok' : '';
+  area.innerHTML += `<div class="${cls}">[${ts}] ${msg}</div>`;
+  area.scrollTop = area.scrollHeight;
+  // Keep last 50 entries
+  while (area.children.length > 50) area.removeChild(area.firstChild);
+}
+</script>
+</body>
+</html>

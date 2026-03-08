@@ -30,6 +30,7 @@ API 端点 (C2):
     GET  /devices/{id}/info                   - 设备详细信息
     GET  /devices/{id}/size                   - 屏幕尺寸
     GET  /devices/{id}/screenshot             - 截图 (PNG 或 base64)
+    GET  /devices/{id}/screenshot/stream       - Stream 截图 (JPEG, 可调质量)
     POST /devices/{id}/tap                    - 点击 {"x", "y"}
     POST /devices/{id}/doubletap              - 双击 {"x", "y"}
     POST /devices/{id}/longpress              - 长按 {"x", "y", "duration"}
@@ -51,6 +52,7 @@ import base64
 import logging
 import secrets
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import (
@@ -62,7 +64,8 @@ from fastapi import (
     Header,
     Query,
 )
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -290,6 +293,23 @@ app = FastAPI(
     version="2.0.0",
 )
 
+# ─── 静态文件 & Web UI ─────────────────────────────────────────────────────
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/web", summary="Web 控制台", response_class=HTMLResponse)
+async def web_ui():
+    """返回 Web 控制台页面。"""
+    index_html = STATIC_DIR / "index.html"
+    if not index_html.exists():
+        raise HTTPException(status_code=404, detail="Web UI 文件不存在")
+    return FileResponse(index_html, media_type="text/html")
+
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 
 # ─── WebSocket 端点 (C1 设备客户端) ────────────────────────────────────────────
 
@@ -420,6 +440,30 @@ async def screenshot(
     else:
         img_bytes = base64.b64decode(image_b64)
         return Response(content=img_bytes, media_type="image/png")
+
+
+@app.get("/devices/{device_id}/screenshot/stream", summary="Stream 截图")
+async def screenshot_stream(
+    session: DeviceSession = Depends(verify_auth),
+    quality: int = Query(50, ge=1, le=100, description="JPEG 压缩质量 (1-100)"),
+):
+    """Stream 模式截图：不保存到磁盘，返回 JPEG 有损压缩图片。\n\n适合 Web 实时预览，通过 quality 参数控制画质与体积的平衡。"""
+    result = await relay_command(
+        session.device_id, "screenshot_stream",
+        {"quality": quality}, timeout=120,
+    )
+    data = result.get("data", {})
+    image_b64 = data.get("image_base64")
+
+    if not image_b64:
+        raise HTTPException(status_code=500, detail="未收到截图数据")
+
+    img_bytes = base64.b64decode(image_b64)
+    return Response(
+        content=img_bytes,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/devices/{device_id}/tap", summary="点击")
