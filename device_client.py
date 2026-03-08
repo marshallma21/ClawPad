@@ -285,25 +285,31 @@ class DeviceClient:
 
     def _print_credentials(self) -> None:
         """打印注册成功后的鉴权信息。"""
+        # 构建 Web 控制台直连 URL
+        base = self.server_url.rstrip("/")
+        web_url = (
+            f"{base}/web"
+            f"?device={self.device_id}&token={self.token}"
+        )
         print(f"""
 ╔══════════════════════════════════════════════════════════════╗
-║  设备注册成功！                                              ║
+║  🎉 设备注册成功！                                          ║
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                              ║
 ║  设备 ID :  {self.device_id:<49}║
 ║  Token   :  {self.token:<49}║
 ║                                                              ║
-║  将以上信息提供给 C2 控制端使用:                             ║
-║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
+🌐 Web 控制台 (浏览器直连):
+  {web_url}
+
+💻 C2 命令行:
 python ios_controller.py -r \\
   --server {self.server_url} \\
   --device {self.device_id} \\
   --token {self.token} \\
   screenshot                                                
-╔══════════════════════════════════════════════════════════════╗
-║  或进入交互模式:                                             ║
-╚══════════════════════════════════════════════════════════════╝
+
 python ios_controller.py -r \\
   --server {self.server_url} \\
   --device {self.device_id} \\

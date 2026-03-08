@@ -2,6 +2,17 @@
 
 在 macOS 上通过 USB 连接 iOS 设备（iPhone / iPad），实现 **截图** 和 **模拟点击/滑动** 等操作。支持 **本地直连** 和 **C1-S-C2 远程转发** 两种模式。
 
+操作控制方式上，可以通过web界面直接进行操作，也可以使用命令行进行操作
+
+<img src="example.png" alt="ClawPad Example" style="max-width:auto; height:500px;" />
+
+<!-- 
+   ClawPad 示例图片2
+   展示 ClawPad 应用的第二个使用示例截图。
+   图片设置为响应式布局，最大宽度为100%，高度自适应。
+-->
+<img src="example2.png" alt="ClawPad Example2" style="max-width:auto; height:500px;" />
+
 ## 架构
 
 ### 直连模式
@@ -41,6 +52,7 @@ Mac (Python) ──USB──▶ iOS 设备 (WebDriverAgent)
 | `ios_controller.py` | 核心控制器 + CLI 入口（直连/C2 远程/启动 Server/注册设备）|
 | `server.py` | 中心转发服务器 (S)，FastAPI + WebSocket |
 | `device_client.py` | 设备端客户端 (C1)，WebSocket 连接 Server |
+| `static/index.html` | Web 控制台前端页面 |
 | `requirements.txt` | Python 依赖 |
 
 核心依赖：
@@ -173,7 +185,33 @@ python device_client.py --server http://<server-ip>:8200 -u <UDID>
 
 C1 会持续运行，等待并执行 Server 转发的指令。断线会自动重连。
 
-#### Step 3：远程控制 (C2)
+#### Step 3：Web 控制台（可选）
+
+启动 Server 后，打开浏览器访问：
+
+```
+http://<server-ip>:8200/web
+```
+
+输入 C1 注册时获得的 **Device ID** 和 **Token** 即可连接设备。
+
+**Web 控制台功能：**
+
+| 功能 | 说明 |
+|------|------|
+| 实时屏幕 | 自动刷新截图（0.5s ~ 5s 可调，或手动刷新） |
+| 触摸模拟 | 点击屏幕发送 tap，拖拽发送 swipe，坐标自动缩放 |
+| 画质调节 | 滑块控制 JPEG 压缩质量（1-100），实时显示传输体积 |
+| 操作按钮 | Home、上滑/下滑、音量+/-、截图 |
+| 文本输入 | 输入框回车发送，支持中英文 |
+| 键盘快捷键 | `R` 刷新截图，`Cmd+H` 按 Home |
+| 操作日志 | 底部实时显示操作结果 |
+| 移动端适配 | 支持触屏手势和响应式布局 |
+
+> **Stream 模式**：Web 控制台默认使用 `/screenshot/stream` 端点，截图不保存到磁盘，
+> 使用 JPEG 有损压缩传输。通过画质滑块调节 quality 参数（值越小体积越小、加载越快）。
+
+#### Step 4：远程控制 (C2)
 
 在任意可访问 Server 的机器上运行：
 
@@ -198,24 +236,6 @@ python ios_controller.py -r \
   --device a1b2c3d4 \
   --token xYz...ABC \
   interactive
-```
-
-也可以直接用 curl 调用 Server API：
-
-```bash
-# 查看已注册设备
-curl http://<server-ip>:8200/devices
-
-# 截图
-curl -H "Authorization: Bearer <TOKEN>" \
-  http://<server-ip>:8200/devices/<DEVICE_ID>/screenshot -o shot.png
-
-# 点击
-curl -X POST \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"x": 200, "y": 300}' \
-  http://<server-ip>:8200/devices/<DEVICE_ID>/tap
 ```
 
 ### 交互模式
@@ -282,6 +302,7 @@ client.tap(200, 300)
 | `/devices/{id}/info` | GET | Token | 设备信息 |
 | `/devices/{id}/size` | GET | Token | 屏幕尺寸 |
 | `/devices/{id}/screenshot` | GET | Token | 截图 (PNG / base64) |
+| `/devices/{id}/screenshot/stream` | GET | Token | Stream 截图 (JPEG, `?quality=1-100`) |
 | `/devices/{id}/tap` | POST | Token | 点击 `{x, y}` |
 | `/devices/{id}/doubletap` | POST | Token | 双击 `{x, y}` |
 | `/devices/{id}/longpress` | POST | Token | 长按 `{x, y, duration}` |
@@ -293,6 +314,7 @@ client.tap(200, 300)
 | `/devices/{id}/volume_up` | POST | Token | 音量+ |
 | `/devices/{id}/volume_down` | POST | Token | 音量- |
 | `/devices/{id}/launch` | POST | Token | 启动应用 `{bundle_id}` |
+| `/web` | GET | 否 | Web 控制台页面 |
 | `/ws/device` | WS | — | C1 WebSocket 注册端点 |
 
 ## 多设备支持
