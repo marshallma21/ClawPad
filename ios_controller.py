@@ -22,6 +22,8 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -185,7 +187,7 @@ class iOSController:
     # ── 滑动 ──────────────────────────────────────────────────────────────
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
-              duration: float = 0.5) -> None:
+              duration: float = 0.1) -> None:
         """
         模拟从 (x1,y1) 滑动到 (x2,y2)。
 
@@ -292,6 +294,205 @@ class iOSController:
         self.disconnect()
 
 
+# ─── 远程客户端 (C2) ──────────────────────────────────────────────────────────
+
+SERVICE_DEFAULT_PORT = 8200
+SERVICE_DEFAULT_URL = f"http://localhost:{SERVICE_DEFAULT_PORT}"
+
+
+class ClawPadClient:
+    """
+    C2 控制客户端：通过 HTTP API + Token 鉴权与 ClawPad Server 通信。
+
+    接口与 iOSController 兼容，可直接在 interactive_mode 中使用。
+
+    架构: C2 (本客户端) ──HTTP──> S (Server) ──WS──> C1 (设备端)
+    """
+
+    def __init__(
+        self,
+        server_url: str,
+        device_id: str,
+        token: str,
+    ):
+        self.server_url = server_url.rstrip("/")
+        self.device_id = device_id
+        self.token = token
+        self._base_path = f"/devices/{device_id}"
+        self._auth_header = f"Bearer {token}"
+        self._check_connection()
+
+    def _check_connection(self) -> None:
+        """检查服务可达且设备已注册。"""
+        try:
+            # /devices 不需要鉴权
+            data = self._get_noauth("/devices")
+            devices = data.get("devices", [])
+            found = any(d["device_id"] == self.device_id for d in devices)
+            if not found:
+                raise ConnectionError(
+                    f"❌ 设备 {self.device_id} 未在服务器上注册\n"
+                    f"   已注册设备: {[d['device_id'] for d in devices]}"
+                )
+            print(f"""
+╔══════════════════════════════════════════════════════════════╗
+║                   ClawPad User Client (C2)                   ║
+╠══════════════════════════════════════════════════════════════╣
+║                                                              ║
+║  ClawPad Server: {self.server_url:<44}║
+║  Target Device:  {self.device_id:<44}║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+""")
+        except urllib.error.URLError as e:
+            raise ConnectionError(
+                f"❌ 无法连接到 ClawPad Server ({self.server_url})\n"
+                f"   请先启动服务器: python server.py\n"
+                f"   错误: {e}"
+            )
+
+    # ── HTTP 封装 ─────────────────────────────────────────────────────────
+
+    def _get_noauth(self, path: str) -> dict:
+        """无鉴权 GET 请求。"""
+        url = f"{self.server_url}{path}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
+
+    def _get(self, path: str) -> dict:
+        """带鉴权的 GET 请求（设备级别路径）。"""
+        url = f"{self.server_url}{self._base_path}{path}"
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", self._auth_header)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e)
+        except urllib.error.URLError as e:
+            raise ConnectionError(f"无法连接到服务器: {e}")
+
+    def _get_binary(self, path: str) -> bytes:
+        """带鉴权的 GET 请求，返回原始字节。"""
+        url = f"{self.server_url}{self._base_path}{path}"
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", self._auth_header)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e)
+        except urllib.error.URLError as e:
+            raise ConnectionError(f"无法连接到服务器: {e}")
+
+    def _post(self, path: str, data: dict | None = None) -> dict:
+        """带鉴权的 POST 请求（设备级别路径）。"""
+        url = f"{self.server_url}{self._base_path}{path}"
+        body = json.dumps(data).encode() if data else b"{}"
+        req = urllib.request.Request(
+            url, data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": self._auth_header,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e)
+        except urllib.error.URLError as e:
+            raise ConnectionError(f"无法连接到服务器: {e}")
+
+    @staticmethod
+    def _handle_http_error(e: urllib.error.HTTPError) -> None:
+        """统一处理 HTTP 错误响应。"""
+        try:
+            detail = json.loads(e.read().decode()).get("detail", str(e))
+        except Exception:
+            detail = str(e)
+        if e.code == 401:
+            raise PermissionError(f"鉴权失败: {detail}")
+        elif e.code == 403:
+            raise PermissionError(f"权限不足: {detail}")
+        elif e.code == 404:
+            raise RuntimeError(f"设备不存在或已离线: {detail}")
+        elif e.code == 503:
+            raise RuntimeError(f"设备离线: {detail}")
+        elif e.code == 504:
+            raise TimeoutError(f"设备响应超时: {detail}")
+        else:
+            raise RuntimeError(f"服务器错误 ({e.code}): {detail}")
+
+    # ── 与 iOSController 兼容的接口 ─────────────────────────────────────
+
+    def screenshot(self, save_path: str | None = None) -> str:
+        if save_path is None:
+            SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_path = str(SCREENSHOT_DIR / f"screenshot_{timestamp}.png")
+        img = self._get_binary("/screenshot")
+        with open(save_path, "wb") as f:
+            f.write(img)
+        print(f"📸 截图已保存: {save_path}")
+        return save_path
+
+    def tap(self, x: int, y: int) -> None:
+        self._post("/tap", {"x": x, "y": y})
+        print(f"👆 点击: ({x}, {y})")
+
+    def double_tap(self, x: int, y: int) -> None:
+        self._post("/doubletap", {"x": x, "y": y})
+        print(f"👆👆 双击: ({x}, {y})")
+
+    def long_press(self, x: int, y: int, duration: float = 1.0) -> None:
+        self._post("/longpress", {"x": x, "y": y, "duration": duration})
+        print(f"👇 长按: ({x}, {y}) 持续 {duration}s")
+
+    def swipe(self, x1: int, y1: int, x2: int, y2: int,
+              duration: float = 0.5) -> None:
+        self._post("/swipe", {"x1": x1, "y1": y1,
+                               "x2": x2, "y2": y2, "duration": duration})
+        print(f"👉 滑动: ({x1},{y1}) -> ({x2},{y2})")
+
+    def swipe_up(self) -> None:
+        self._post("/swipe_up")
+        print("👆 上滑")
+
+    def swipe_down(self) -> None:
+        self._post("/swipe_down")
+        print("👇 下滑")
+
+    def type_text(self, text: str) -> None:
+        self._post("/type", {"text": text})
+        print(f"⌨️  输入: {text}")
+
+    def press_home(self) -> None:
+        self._post("/home")
+        print("🏠 按下 Home 键")
+
+    def press_volume_up(self) -> None:
+        self._post("/volume_up")
+        print("🔊 音量+")
+
+    def press_volume_down(self) -> None:
+        self._post("/volume_down")
+        print("🔉 音量-")
+
+    def launch_app(self, bundle_id: str) -> None:
+        self._post("/launch", {"bundle_id": bundle_id})
+        print(f"🚀 已启动应用: {bundle_id}")
+
+    def get_device_info(self) -> dict:
+        return self._get("/info")
+
+    def get_screen_size(self) -> tuple[int, int]:
+        data = self._get("/size")
+        return (data["width"], data["height"])
+
+
 # ─── 命令行接口 ────────────────────────────────────────────────────────────────
 
 def list_devices():
@@ -323,25 +524,29 @@ def list_devices():
         print(f"❌ 扫描设备时出错: {e}")
 
 
-def interactive_mode(controller: iOSController):
-    """进入交互模式，可以实时操作设备。"""
-    print("\n" + "=" * 50)
-    print("🎮 交互模式 - 输入命令操作设备")
-    print("=" * 50)
-    print("可用命令:")
-    print("  screenshot / ss      - 截图")
-    print("  tap <x> <y>          - 点击坐标")
-    print("  doubletap <x> <y>    - 双击坐标")
-    print("  longpress <x> <y>    - 长按坐标")
-    print("  swipe <x1> <y1> <x2> <y2> - 滑动")
-    print("  swipeup / swipedown  - 上/下滑动")
-    print("  type <text>          - 输入文本")
-    print("  home                 - 按 Home 键")
-    print("  info                 - 设备信息")
-    print("  size                 - 屏幕尺寸")
-    print("  launch <bundle_id>   - 启动应用")
-    print("  quit / exit          - 退出")
-    print("=" * 50 + "\n")
+def interactive_mode(controller):
+    """进入交互模式，可以实时操作设备。支持 iOSController 和 ClawPadClient。"""
+
+    print(f"""
+╔══════════════════════════════════════════════════════════════╗
+║                  ClawPad Interactive Mode                    ║
+╠══════════════════════════════════════════════════════════════╣
+║                                                              ║
+║  screenshot / ss      - 截图                                 ║
+║  tap <x> <y>          - 点击坐标                             ║
+║  doubletap <x> <y>    - 双击坐标                             ║
+║  longpress <x> <y>    - 长按坐标                             ║
+║  swipe <x1> <y1> <x2> <y2> - 滑动                            ║
+║  swipeup / swipedown  - 上/下滑动                            ║
+║  type <text>          - 输入文本                             ║
+║  home                 - 按 Home 键                           ║
+║  info                 - 设备信息                             ║
+║  size                 - 屏幕尺寸                             ║
+║  launch <bundle_id>   - 启动应用                             ║
+║  quit / exit          - 退出                                 ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+""")
 
     while True:
         try:
@@ -418,19 +623,33 @@ def main():
         description="ClawPad - iOS 设备控制器（截图、点击、滑动）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-示例:
-  %(prog)s list                          # 列出设备
+直连模式（本地 USB 设备）:
+  %(prog)s list                          # 列出本地设备
   %(prog)s screenshot                    # 截图
-  %(prog)s screenshot -o my_shot.png     # 截图保存到指定路径
-  %(prog)s tap 200 300                   # 点击坐标 (200, 300)
-  %(prog)s swipe 100 500 100 200         # 从 (100,500) 滑到 (100,200)
-  %(prog)s interactive                   # 进入交互模式
-  %(prog)s launch com.apple.mobilesafari # 启动 Safari
+  %(prog)s tap 200 300                   # 点击坐标
+  %(prog)s interactive                   # 交互模式
+
+服务架构（C1-S-C2）:
+  %(prog)s serve                         # 启动中心服务器 (S)
+  %(prog)s register --server URL         # 注册本地设备到服务器 (C1)
+  %(prog)s -r --server URL \\            # 远程控制设备 (C2)
+           --device ID --token TOKEN screenshot
+  %(prog)s -r --server URL \\            # 远程交互模式 (C2)
+           --device ID --token TOKEN interactive
         """,
     )
     parser.add_argument("-u", "--udid", help="指定设备 UDID（多设备时使用）")
     parser.add_argument("-p", "--port", type=int, default=WDA_PORT,
                         help=f"WDA 端口号（默认: {WDA_PORT}）")
+
+    # C2 远程模式参数
+    remote_group = parser.add_argument_group("远程模式 (C2)")
+    remote_group.add_argument("-r", "--remote", action="store_true",
+                              help="通过 Server 远程控制设备")
+    remote_group.add_argument("--server", default=SERVICE_DEFAULT_URL,
+                              help=f"Server 地址（默认: {SERVICE_DEFAULT_URL}）")
+    remote_group.add_argument("--device", help="目标设备 ID")
+    remote_group.add_argument("--token", help="鉴权 Token")
 
     sub = parser.add_subparsers(dest="command", help="命令")
 
@@ -462,6 +681,19 @@ def main():
     # interactive
     sub.add_parser("interactive", aliases=["i"], help="交互模式")
 
+    # serve (启动服务器 S)
+    p_serve = sub.add_parser("serve", help="启动中心转发服务器 (S)")
+    p_serve.add_argument("--host", default="0.0.0.0",
+                         help="监听地址 (默认: 0.0.0.0)")
+    p_serve.add_argument("--service-port", type=int, default=SERVICE_DEFAULT_PORT,
+                         help=f"服务端口 (默认: {SERVICE_DEFAULT_PORT})")
+
+    # register (注册本地设备到服务器 C1)
+    p_reg = sub.add_parser("register", aliases=["reg"],
+                           help="注册本地设备到服务器 (C1)")
+    p_reg.add_argument("--server", default=SERVICE_DEFAULT_URL,
+                       help=f"Server 地址（默认: {SERVICE_DEFAULT_URL}）")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -472,7 +704,66 @@ def main():
         list_devices()
         return
 
-    # 需要连接设备的命令
+    if args.command == "serve":
+        from server import start_server
+        start_server(
+            host=args.host,
+            port=args.service_port,
+        )
+        return
+
+    if args.command in ("register", "reg"):
+        from device_client import DeviceClient
+        import asyncio
+        client = DeviceClient(
+            server_url=args.server,
+            udid=args.udid,
+            wda_port=args.port,
+        )
+        try:
+            asyncio.run(client.run_forever())
+        except KeyboardInterrupt:
+            pass
+        return
+
+    # ── 远程模式 (C2)：通过 Server 远程控制设备 ──────────────────────────
+    if args.remote:
+        if not args.device or not args.token:
+            print("❌ 远程模式需要 --device 和 --token 参数")
+            print("   用法: python ios_controller.py -r \\") 
+            print("           --server URL --device ID --token TOKEN 命令")
+            print("\n   提示: 先运行 'python ios_controller.py register' 获取凭证")
+            sys.exit(1)
+
+        try:
+            client = ClawPadClient(
+                server_url=args.server,
+                device_id=args.device,
+                token=args.token,
+            )
+        except (ConnectionError, PermissionError) as e:
+            print(str(e))
+            sys.exit(1)
+
+        try:
+            if args.command in ("screenshot", "ss"):
+                client.screenshot(args.output)
+            elif args.command == "tap":
+                client.tap(args.x, args.y)
+            elif args.command == "swipe":
+                client.swipe(args.x1, args.y1, args.x2, args.y2, args.duration)
+            elif args.command == "launch":
+                client.launch_app(args.bundle_id)
+            elif args.command in ("interactive", "i"):
+                interactive_mode(client)
+        except KeyboardInterrupt:
+            print("\n中断退出")
+        except Exception as e:
+            print(f"\n❌ 错误: {e}")
+            sys.exit(1)
+        return
+
+    # ── 直连模式：本地 USB 直接连接设备 ──────────────────────────────────
     ctrl = iOSController(udid=args.udid, wda_port=args.port)
 
     try:

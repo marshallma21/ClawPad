@@ -1,3 +1,6 @@
 facebook-wda>=1.4.0
 tidevice[openssl]>=0.9.0
 Pillow>=9.0.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+websockets>=12.0

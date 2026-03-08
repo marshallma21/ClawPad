@@ -1,8 +1,10 @@
 # ClawPad - iOS 设备控制器
 
-在 macOS 上通过 USB 连接 iOS 设备（iPhone / iPad），实现 **截图** 和 **模拟点击/滑动** 等操作。
+在 macOS 上通过 USB 连接 iOS 设备（iPhone / iPad），实现 **截图** 和 **模拟点击/滑动** 等操作。支持 **本地直连** 和 **C1-S-C2 远程转发** 两种模式。
 
-## 原理
+## 架构
+
+### 直连模式
 
 ```
 Mac (Python) ──USB──▶ iOS 设备 (WebDriverAgent)
@@ -11,10 +13,42 @@ Mac (Python) ──USB──▶ iOS 设备 (WebDriverAgent)
                 facebook-wda 发送指令
 ```
 
+### 远程转发模式 (C1-S-C2)
+
+```
+┌──────────────┐    WebSocket     ┌──────────────┐    HTTP + Token    ┌──────────────┐
+│  C1 设备端    │ ═══════════════> │  S 服务器     │ <═══════════════  │  C2 控制端    │
+│              │                  │              │                   │              │
+│ 连接 iOS 设备 │  注册设备         │ 转发指令      │  发送控制指令      │ 发送指令       │
+│ 执行本地操作   │  返回结果         │ 管理鉴权      │  携带 Token       │ 接收结果       │
+└──────────────┘                  └──────────────┘                   └──────────────┘
+  device_client.py                  server.py                     ios_controller.py -r
+```
+
+- **C1（设备端）** — 物理连接 iOS 设备的机器，通过 WebSocket 注册到 Server
+- **S（服务器）** — 中心转发服务器，管理设备注册、鉴权、指令转发
+- **C2（控制端）** — 任意可访问 Server 的机器，通过 HTTP + Token 发送控制指令
+
+**鉴权流程：**
+1. C1 注册设备 → Server 生成 `device_id` + `token` 返回给 C1
+2. C1 终端打印凭证，用户将其提供给 C2
+3. C2 的所有请求带 `Authorization: Bearer <token>`，Server 校验后转发给 C1
+
+## 文件结构
+
+| 文件 | 说明 |
+|------|------|
+| `ios_controller.py` | 核心控制器 + CLI 入口（直连/C2 远程/启动 Server/注册设备）|
+| `server.py` | 中心转发服务器 (S)，FastAPI + WebSocket |
+| `device_client.py` | 设备端客户端 (C1)，WebSocket 连接 Server |
+| `requirements.txt` | Python 依赖 |
+
 核心依赖：
 - **[tidevice](https://github.com/alibaba/taobao-iphone-device)** — 阿里巴巴开源工具，用于与 iOS 设备通信、启动 WDA
 - **[facebook-wda](https://github.com/openatx/facebook-wda)** — WebDriverAgent 的 Python 客户端，实现截图/点击/滑动
 - **[WebDriverAgent](https://github.com/appium/WebDriverAgent)** — Facebook 开源的 iOS 自动化测试框架，运行在设备上
+- **[FastAPI](https://fastapi.tiangolo.com/)** — Server 端 HTTP + WebSocket 框架
+- **[websockets](https://websockets.readthedocs.io/)** — C1 端 WebSocket 客户端
 
 ## 前置条件
 
@@ -69,7 +103,9 @@ WDA_BUNDLE_ID = "com.facebook.WebDriverAgentRunner.xctrunner"
 
 ## 使用方法
 
-### 命令行模式
+### 一、直连模式（本地 USB）
+
+直接通过 USB 连接设备操作，无需 Server。
 
 ```bash
 # 列出已连接的设备
@@ -94,13 +130,98 @@ python ios_controller.py launch com.apple.mobilesafari
 python ios_controller.py interactive
 ```
 
-### 交互模式
+### 二、远程转发模式（C1-S-C2）
+
+适用于设备和控制端不在同一台机器的场景。
+
+#### Step 1：启动 Server (S)
+
+在任意可被 C1 和 C2 访问的机器上运行：
 
 ```bash
-python ios_controller.py interactive
+python server.py
+# 或
+python ios_controller.py serve
+# 自定义端口
+python server.py --host 0.0.0.0 --port 8200
 ```
 
-进入后可以连续输入命令：
+启动后可访问 `http://<IP>:8200/docs` 查看 Swagger API 文档。
+
+#### Step 2：注册设备 (C1)
+
+在连接了 iOS 设备的机器上运行：
+
+```bash
+python device_client.py --server http://<server-ip>:8200
+# 或
+python ios_controller.py register --server http://<server-ip>:8200
+# 指定设备
+python device_client.py --server http://<server-ip>:8200 -u <UDID>
+```
+
+注册成功后会打印：
+```
+╔═══════════════════════════════════════════╗
+║  🎉 设备注册成功！                        ║
+║  设备 ID :  a1b2c3d4                      ║
+║  Token   :  xYz...ABC                     ║
+╚═══════════════════════════════════════════╝
+```
+
+**将 `设备 ID` 和 `Token` 提供给 C2 控制端使用。**
+
+C1 会持续运行，等待并执行 Server 转发的指令。断线会自动重连。
+
+#### Step 3：远程控制 (C2)
+
+在任意可访问 Server 的机器上运行：
+
+```bash
+# 截图
+python ios_controller.py -r \
+  --server http://<server-ip>:8200 \
+  --device a1b2c3d4 \
+  --token xYz...ABC \
+  screenshot
+
+# 点击
+python ios_controller.py -r \
+  --server http://<server-ip>:8200 \
+  --device a1b2c3d4 \
+  --token xYz...ABC \
+  tap 200 300
+
+# 远程交互模式
+python ios_controller.py -r \
+  --server http://<server-ip>:8200 \
+  --device a1b2c3d4 \
+  --token xYz...ABC \
+  interactive
+```
+
+也可以直接用 curl 调用 Server API：
+
+```bash
+# 查看已注册设备
+curl http://<server-ip>:8200/devices
+
+# 截图
+curl -H "Authorization: Bearer <TOKEN>" \
+  http://<server-ip>:8200/devices/<DEVICE_ID>/screenshot -o shot.png
+
+# 点击
+curl -X POST \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"x": 200, "y": 300}' \
+  http://<server-ip>:8200/devices/<DEVICE_ID>/tap
+```
+
+### 交互模式
+
+无论直连还是远程，交互模式的命令完全一致：
+
 ```
 ClawPad> ss                         # 截图
 ClawPad> tap 200 300                # 点击
@@ -123,23 +244,13 @@ ClawPad> quit                       # 退出
 ```python
 from ios_controller import iOSController
 
-# 方式 1：with 语句自动管理连接
+# 方式 1：with 语句自动管理连接（直连）
 with iOSController() as ctrl:
-    # 截图
     ctrl.screenshot("test.png")
-
-    # 点击坐标
     ctrl.tap(200, 300)
-
-    # 滑动
     ctrl.swipe(100, 500, 100, 200)
-
-    # 输入文本
     ctrl.type_text("Hello")
-
-    # 获取屏幕尺寸
     w, h = ctrl.get_screen_size()
-    print(f"屏幕: {w}x{h}")
 
 # 方式 2：手动管理
 ctrl = iOSController(udid="your-device-udid")
@@ -147,7 +258,42 @@ ctrl.connect()
 ctrl.screenshot()
 ctrl.tap(100, 200)
 ctrl.disconnect()
+
+# 方式 3：远程模式（通过 Server）
+from ios_controller import ClawPadClient
+
+client = ClawPadClient(
+    server_url="http://<server-ip>:8200",
+    device_id="a1b2c3d4",
+    token="xYz...ABC",
+)
+client.screenshot("test.png")
+client.tap(200, 300)
 ```
+
+## Server API 端点
+
+启动 Server 后访问 `/docs` 查看完整 Swagger 文档。
+
+| 端点 | 方法 | 鉴权 | 说明 |
+|------|------|------|------|
+| `/` | GET | 否 | 服务信息 |
+| `/devices` | GET | 否 | 列出已注册设备 |
+| `/devices/{id}/info` | GET | Token | 设备信息 |
+| `/devices/{id}/size` | GET | Token | 屏幕尺寸 |
+| `/devices/{id}/screenshot` | GET | Token | 截图 (PNG / base64) |
+| `/devices/{id}/tap` | POST | Token | 点击 `{x, y}` |
+| `/devices/{id}/doubletap` | POST | Token | 双击 `{x, y}` |
+| `/devices/{id}/longpress` | POST | Token | 长按 `{x, y, duration}` |
+| `/devices/{id}/swipe` | POST | Token | 滑动 `{x1, y1, x2, y2, duration}` |
+| `/devices/{id}/swipe_up` | POST | Token | 上滑 |
+| `/devices/{id}/swipe_down` | POST | Token | 下滑 |
+| `/devices/{id}/type` | POST | Token | 输入文本 `{text}` |
+| `/devices/{id}/home` | POST | Token | Home 键 |
+| `/devices/{id}/volume_up` | POST | Token | 音量+ |
+| `/devices/{id}/volume_down` | POST | Token | 音量- |
+| `/devices/{id}/launch` | POST | Token | 启动应用 `{bundle_id}` |
+| `/ws/device` | WS | — | C1 WebSocket 注册端点 |
 
 ## 多设备支持
 
@@ -157,10 +303,15 @@ ctrl.disconnect()
 # 先列出设备查看 UDID
 python ios_controller.py list
 
-# 指定设备操作
+# 指定设备操作（直连）
 python ios_controller.py -u <UDID> screenshot
 python ios_controller.py -u <UDID> interactive
+
+# 指定设备注册（远程模式 C1）
+python device_client.py --server http://<server>:8200 -u <UDID>
 ```
+
+远程模式下，每台设备注册后会获得独立的 `device_id` 和 `token`，C2 通过不同的凭证控制不同设备。
 
 ## 常见问题
 
@@ -182,6 +333,15 @@ python ios_controller.py -u <UDID> interactive
 ### Q: 免费开发者账号签名过期
 - 免费 Apple ID 签名有效期 7 天
 - 过期后需要重新用 Xcode 编译安装 WDA
+
+### Q: C1 与 Server 断线
+- C1 (device_client) 内置自动重连机制，5 秒后自动尝试重连
+- 重连后 device_id 和 token 会重新生成，需将新凭证提供给 C2
+
+### Q: C2 鉴权失败 (403)
+- 确认 device_id 和 token 正确（区分大小写）
+- 确认 C1 仍在线（设备未断开）
+- 如果 C1 重连过，需使用新的凭证
 
 ## 常用 Bundle ID
 
